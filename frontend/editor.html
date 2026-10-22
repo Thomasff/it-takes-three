@@ -116,14 +116,15 @@
           <div id="term-output" class="term-output"></div>
           <div class="term-input-row">
             <span class="term-prompt">&gt;</span>
-            <input id="term-input" type="text" spellcheck="false" placeholder="标准输入 (stdin)，回车发送" disabled>
+            <textarea id="term-input" rows="1" spellcheck="false" placeholder="标准输入 (stdin)：回车发送，可粘贴多行，Shift+回车换行，Ctrl+D 发送 EOF" disabled></textarea>
+            <button id="term-eof" class="term-eof" title="关闭标准输入（EOF），用于 while (cin >> x) 这类读到文件尾的程序" disabled>EOF</button>
           </div>
         </div>
         <div id="tab-console" class="run-tabpane">
           <div id="console-output" class="term-output"></div>
           <div class="term-input-row">
             <span class="term-prompt">&gt;</span>
-            <input id="console-input" type="text" spellcheck="false" placeholder="调试时程序的标准输入，回车发送" disabled>
+            <textarea id="console-input" rows="1" spellcheck="false" placeholder="调试时程序的标准输入，回车发送" disabled></textarea>
           </div>
         </div>
         <div id="tab-vars" class="run-tabpane">

@@ -17,7 +17,9 @@
 
   function fmtTime(t) {
     if (!t) return ''
-    const d = new Date(t)
+    // SQLite 返回的时间丢失时区（实际为 UTC），补 'Z' 按 UTC 解析（与编辑器计时器一致）
+    const s = String(t).replace(' ', 'T')
+    const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z')
     const p = (n) => String(n).padStart(2, '0')
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
   }

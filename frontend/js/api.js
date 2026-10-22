@@ -21,6 +21,11 @@ async function request(path, { method = 'GET', body } = {}) {
   } catch (e) {
     /* 响应体非 JSON */
   }
+  // 登录过期/失效：清掉本地登录态回登录页（否则页面只会反复报错，用户找不到出路）
+  if (resp.status === 401 && path !== '/auth/login') {
+    if (token === Auth.getToken()) Auth.clear() // 本地存的已是别的账号（其他标签登录）时不误删
+    location.href = '/login.html'
+  }
   if (!resp.ok) {
     const err = new Error((data && data.detail) || `请求失败（HTTP ${resp.status}）`)
     err.status = resp.status

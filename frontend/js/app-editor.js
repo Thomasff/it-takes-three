@@ -316,6 +316,8 @@ function captainFile() {
 // 打开的代码文件统一：队员只能看到队长正在看的文件
 function followCaptain() {
   if (isCaptain()) return
+  // 调试中暂不跟随（断点/当前行绑定在当前文件，切走会中断调试），调试结束后再跟上
+  if (activeKind === 'debug') return
   const file = captainFile()
   if (file && file !== current && y.filesMap.has(file)) openFile(file)
 }
@@ -496,12 +498,13 @@ function closeFile() {
   }
   current = null
   if (isCaptain() && y) y.awareness.setLocalStateField('file', null)
-  // 关闭文件：停止正在进行的运行/调试，清空断点与当前行高亮
+  // 关闭文件：清空断点与当前行高亮；调试依赖当前文件，随之停止。
+  // 运行不受影响（程序已编译在跑，输出在终端），切换文件不打断别人的运行
   if (breakpointMgr) {
     breakpointMgr.clear()
     breakpointMgr.clearCurrentLine()
   }
-  stopSession()
+  if (activeKind === 'debug') stopSession()
   updateRunButtons()
 }
 
@@ -561,6 +564,13 @@ function initRunDebug() {
   runPanel.onInput = (data) => {
     if (activeKind === 'debug' && debugSession) debugSession.sendStdin(data)
     else if (activeKind === 'run' && runSession) runSession.sendStdin(data)
+  }
+  // EOF：仅运行模式（调试时 stdin 经 gdb 转发，无法单独关闭）
+  runPanel.onEof = () => {
+    if (activeKind === 'run' && runSession) {
+      runSession.eof()
+      runPanel.termPrint('[已发送 EOF]\n', 'muted')
+    }
   }
 
   initRunBarDrag()
@@ -662,6 +672,8 @@ function startRun() {
           ? `[已超出时间限制，程序被终止（耗时 ${info.time_ms} ms）]\n`
           : `[进程已退出，退出码 ${info.code}，耗时 ${info.time_ms} ms]\n`,
         'muted')
+      runSession.close() // 关闭连接，避免每次运行都残留一个 WebSocket
+      runSession = null
       endSession()
     },
     onError: () => { runPanel.termPrint('[运行连接出错]\n', 'err'); endSession() },
@@ -720,6 +732,8 @@ function startDebug() {
     },
     onExit: (info) => {
       runPanel.consolePrint(`[调试会话结束，退出码 ${info.code}]\n`, 'muted')
+      debugSession.close()
+      debugSession = null
       endSession()
     },
     onStack: (list) => runPanel.setStack(list),
@@ -763,6 +777,8 @@ function endSession() {
   if (breakpointMgr) breakpointMgr.clearCurrentLine()
   if (runPanel) runPanel.setInputEnabled(false)
   updateRunButtons()
+  // 调试期间暂停的跟随：结束后跟上队长当前文件（延后执行：endSession 可能在 closeFile 过程中被调用）
+  if (y) setTimeout(followCaptain, 0)
 }
 
 // ---- 启动 ----
