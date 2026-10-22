@@ -78,15 +78,10 @@ function arraysEqual(a, b) {
 
 // ---- 比赛加载 ----
 async function loadContest() {
-  try {
-    contest = await API.getContest(slug)
-  } catch (e) {
-    if (e.status === 403) {
-      // 尚未加入：自动加入（仅 created 状态可加入）
-      contest = await API.joinContest(slug)
-    } else {
-      throw e
-    }
+  contest = await API.getContest(slug)
+  // 经分享链接进入但尚未加入：自动加入（支持比赛开始后中途加入，后端会分配颜色）
+  if (!(contest.members || []).some((x) => x.user_id === me.id)) {
+    contest = await API.joinContest(slug)
   }
   if (contest.status !== 'started') return false
   const m = (contest.members || []).find((x) => x.user_id === me.id)
@@ -195,6 +190,7 @@ async function initEditor() {
   if (scratchpad) scratchpad.setShowNames(namesVisible)
 
   renderMembers()
+  startMembersPoll()
   startTimer()
   renderFileTree()
   maybeOpenFirst()
@@ -241,6 +237,16 @@ function renderMembers() {
     const color = m.color || '#888'
     return `<div class="member"><span class="dot" style="background:${color}"></span><span>${esc(m.display_name || m.username || `#${m.user_id}`)}</span></div>`
   }).join('')
+}
+
+// 定时刷新成员列表：有人中途加入时其他成员能看到（成员信息只在 REST 中，Yjs 不承载）
+function startMembersPoll() {
+  setInterval(async () => {
+    try {
+      contest = await API.getContest(slug)
+      renderMembers()
+    } catch (e) { /* 网络抖动，下次再试 */ }
+  }, 5000)
 }
 
 function startTimer() {

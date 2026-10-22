@@ -95,21 +95,26 @@ def get_contest(slug: str, db: Session = Depends(get_db),
 @router.post("/{slug}/join", response_model=ContestOut)
 def join_contest(slug: str, db: Session = Depends(get_db),
                  user: User = Depends(get_current_user)) -> ContestOut:
-    """功能：加入比赛（幂等：已是成员则直接返回）。已开始/已结束的比赛不可加入。
+    """功能：加入比赛（幂等：已是成员则直接返回）。支持中途加入：
+    比赛已开始时，为新成员分配一个尚未被占用的 PALETTE 颜色。
     请求：POST /api/contests/{slug}/join
-    依赖：get_db、get_current_user。可调参数：无。"""
+    依赖：get_db、get_current_user、config.PALETTE。可调参数：PALETTE（config）。"""
     contest = db.query(Contest).filter(Contest.slug == slug).first()
     if contest is None:
         raise HTTPException(status_code=404, detail="比赛不存在")
-    if contest.status != "created":
-        raise HTTPException(status_code=409, detail="比赛已开始，无法加入")
     member = (
         db.query(ContestMember)
         .filter(ContestMember.contest_id == contest.id, ContestMember.user_id == user.id)
         .first()
     )
     if member is None:
-        db.add(ContestMember(contest_id=contest.id, user_id=user.id))
+        color = None
+        if contest.status == "started":
+            used = {m.color for m in contest.members if m.color}
+            free = [c for c in _settings.PALETTE if c not in used]
+            # 调色板用尽时允许重复颜色（人数超过 PALETTE 长度的极端情况）
+            color = random.choice(free or list(_settings.PALETTE))
+        db.add(ContestMember(contest_id=contest.id, user_id=user.id, color=color))
         db.commit()
         db.refresh(contest)
     return _contest_out(db, contest)

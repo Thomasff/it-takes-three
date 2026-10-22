@@ -17,7 +17,7 @@ from ..models import Contest, ContestMember
 from ..security import get_user_by_token
 from ..state import rooms
 from ..yws.awareness import AwarenessHub
-from ..yws.codec import pack_message, read_varuint, read_varuint8array, read_varstring, unpack_message
+from ..yws.codec import pack_message, read_varuint, read_varuint8array, read_varstring, unpack_message, write_varuint8array
 from ..yws.room import ContestRoom
 from ..yws.sync import MSG_AWARENESS, MSG_QUERY_AWARENESS, MSG_SYNC, SYNC_STEP1, SYNC_STEP2, SYNC_UPDATE, encode_sync_step1, encode_sync_step2, encode_update_message
 
@@ -38,6 +38,17 @@ def _first_client_id(payload: bytes) -> int | None:
         return cid
     except (ValueError, IndexError):
         return None
+
+
+def _awareness_message(update: bytes) -> bytes:
+    """功能：封装下行 awareness 消息 [1][varUint8Array(awarenessUpdate)]。
+    官方 y-websocket 客户端按 readVarUint8Array 解包，缺少长度前缀会解码失败
+    （Unexpected end of array），远端光标/在线状态整条丢失。
+    API: _awareness_message(bytes) → bytes
+    依赖：codec.write_varuint8array/pack_message。可调参数：无。"""
+    out = bytearray()
+    write_varuint8array(out, update)
+    return pack_message(MSG_AWARENESS, bytes(out))
 
 
 def _decode_sync(payload: bytes) -> tuple[int, bytes]:
@@ -83,7 +94,7 @@ async def ws_contest(websocket: WebSocket, slug: str,
         try:
             # 握手：若房间已有其它用户状态，下发快照，让新连接立即看到在线者光标
             if not hub.is_empty():
-                await websocket.send_bytes(pack_message(MSG_AWARENESS, hub.snapshot()))
+                await websocket.send_bytes(_awareness_message(hub.snapshot()))
 
             while True:
                 try:
@@ -111,16 +122,16 @@ async def ws_contest(websocket: WebSocket, slug: str,
                     if cid is not None:
                         conn_client_id = cid
                     if hub.apply(payload, websocket):
-                        room.broadcast(pack_message(MSG_AWARENESS, hub.encode_states()))
+                        room.broadcast(_awareness_message(hub.encode_states()))
                 elif msg_type == MSG_QUERY_AWARENESS:
-                    await websocket.send_bytes(pack_message(MSG_AWARENESS, hub.snapshot()))
+                    await websocket.send_bytes(_awareness_message(hub.snapshot()))
         finally:
             # 断连清理：移除连接注册；若该连接有 clientID 状态则从 hub 删除并广播给其他连接
             room.remove_connection(websocket)
             if conn_client_id is not None and conn_client_id in hub.states:
                 hub.remove_client(conn_client_id)
                 room.broadcast(
-                    pack_message(MSG_AWARENESS, hub.encode_client(conn_client_id)),
+                    _awareness_message(hub.encode_client(conn_client_id)),
                     exclude=websocket,
                 )
     finally:
