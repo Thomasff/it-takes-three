@@ -152,6 +152,7 @@ async function initEditor() {
   scratchpad = scratchpadMod.initScratchpad({
     doc: scratchY.doc,
     awareness: scratchY.awareness,
+    provider: scratchY.provider,
     getShowNames: () => namesVisible,
   })
   // 视图切换：显示草稿纸 → 隐藏编辑器区（顺带收起运行面板与运行/调试按钮）；
