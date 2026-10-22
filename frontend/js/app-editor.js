@@ -1,10 +1,11 @@
 // app-editor.js — 编辑器页主逻辑（ES 模块入口）
 // 功能：鉴权 → 加入/读取比赛 → 未开始则等待（创建者可就地开始）→
 //       加载 Monaco + Yjs 连接 → 文件树/成员面板/倒计时 → 文件 CRUD（CRDT 广播）→ 光标同步。
+//       队长权限：只有队长（contest.creator_id）能编辑代码/增删文件，其他成员只读；队长可交接身份。
 // 依赖：auth.js、api.js（全局）、editor-setup.js、yjs-setup.js、cursors.js、y-monaco。
 // 可调参数：无。
 import { createEditor } from './editor-setup.js'
-import { setupYjs, createFile, deleteFile } from './yjs-setup.js'
+import { setupYjs, setupScratchYjs, createFile, deleteFile } from './yjs-setup.js'
 import { setupRemoteCursors } from './cursors.js'
 import { RunSession } from './runner.js'
 import { DebugSession, BreakpointManager } from './debugger.js'
@@ -22,6 +23,7 @@ const me = Auth.getUser()
 // 页面加载时即捕获 token：多标签页共享 localStorage，其他标签登录会覆盖它；
 // 本页在加载后应始终用当时捕获的会话，避免连接身份被串改。
 const myToken = Auth.getToken()
+API.pinToken(myToken) // REST 请求同样固定用本页会话
 
 const timerEl = document.getElementById('timer')
 const memberListEl = document.getElementById('member-list')
@@ -54,6 +56,7 @@ let myColor = null
 let pollTimer = null
 let editor = null
 let y = null
+let scratchY = null // 草稿纸独立连接（所有成员可写）
 let current = null
 let currentCursors = null // 当前文件的光标渲染器（供名称开关实时控制）
 let namesVisible = true // 远端用户名标签显示开关（localStorage 持久化）
@@ -131,19 +134,22 @@ async function initEditor() {
   initRunDebug()
   const mod = await import('y-monaco')
   MonacoBinding = mod.MonacoBinding
-  y = setupYjs(slug, myToken, {
+  const localUser = {
+    id: me.id,
     display_name: me.display_name,
     username: me.username,
     color: myColor,
-  })
+  }
+  y = setupYjs(slug, myToken, localUser)
   window.__vp = y // 调试
 
   // ---- 草稿纸（编辑器/草稿纸 视图切换）----
-  // annotations 走 Y.Map：sync step2 全量 diff，天然随现有协议同步，后端零改动。
+  // 草稿纸使用独立 Y.Doc（/ws/scratch/{slug}）：代码房间只有队长可写，草稿纸所有成员都可写。
+  scratchY = setupScratchYjs(slug, myToken, localUser)
   const scratchpadMod = await import('./scratchpad.js')
   scratchpad = scratchpadMod.initScratchpad({
-    doc: y.doc,
-    awareness: y.awareness,
+    doc: scratchY.doc,
+    awareness: scratchY.awareness,
     getShowNames: () => namesVisible,
   })
   // 视图切换：显示草稿纸 → 隐藏编辑器区（顺带收起运行面板与运行/调试按钮）；
@@ -190,6 +196,10 @@ async function initEditor() {
   if (scratchpad) scratchpad.setShowNames(namesVisible)
 
   renderMembers()
+  applyPermission()
+  initHandover()
+  // 在线状态来自代码房间 awareness（user.id），成员上下线时刷新成员面板
+  y.awareness.on('change', () => renderMembers())
   startMembersPoll()
   startTimer()
   renderFileTree()
@@ -203,6 +213,7 @@ async function initEditor() {
   })
 
   document.getElementById('btn-add-file').addEventListener('click', () => {
+    if (!isCaptain()) return
     const name = newFileInput.value.trim() || 'main.cpp'
     if (createFile(y.filesMap, name)) {
       newFileInput.value = ''
@@ -216,6 +227,7 @@ async function initEditor() {
     if (runSession) runSession.close()
     if (debugSession) debugSession.close()
     if (y) y.provider.destroy()
+    if (scratchY) scratchY.provider.destroy()
   })
 }
 
@@ -231,22 +243,102 @@ function applySettings(ed, s) {
   window.dispatchEvent(new Event('resize'))
 }
 
-// ---- 成员面板 / 倒计时 ----
+// ---- 成员面板 / 队长权限 / 倒计时 ----
+function isCaptain() {
+  return !!contest && contest.creator_id === me.id
+}
+
+function memberName(m) {
+  return m.display_name || m.username || `#${m.user_id}`
+}
+
+// 当前在线成员 user_id 集合（代码房间 awareness 中的 user.id，含自己）
+function onlineUserIds() {
+  const ids = new Set([me.id])
+  if (y) {
+    y.awareness.getStates().forEach((state) => {
+      if (state.user && state.user.id != null) ids.add(state.user.id)
+    })
+  }
+  return ids
+}
+
 function renderMembers() {
+  const online = onlineUserIds()
   memberListEl.innerHTML = (contest.members || []).map((m) => {
     const color = m.color || '#888'
-    return `<div class="member"><span class="dot" style="background:${color}"></span><span>${esc(m.display_name || m.username || `#${m.user_id}`)}</span></div>`
+    const isOnline = online.has(m.user_id)
+    const badge = m.user_id === contest.creator_id ? '<span class="captain-badge">队长</span>' : ''
+    return `<div class="member${isOnline ? '' : ' offline'}" title="${isOnline ? '在线' : '离线'}"><span class="dot" style="background:${color}"></span><span>${esc(memberName(m))}</span>${badge}</div>`
   }).join('')
 }
 
-// 定时刷新成员列表：有人中途加入时其他成员能看到（成员信息只在 REST 中，Yjs 不承载）
+// 按队长身份切换只读：编辑器 readOnly、隐藏新建/删除文件、显示交接按钮
+function applyPermission() {
+  const cap = isCaptain()
+  if (editor) {
+    editor.updateOptions({ readOnly: !cap, readOnlyMessage: { value: '只有队长可以编辑代码' } })
+  }
+  document.querySelector('.file-actions').classList.toggle('hidden', !cap)
+  document.getElementById('readonly-hint').classList.toggle('hidden', cap)
+  document.getElementById('btn-handover').classList.toggle('hidden', !cap)
+  if (!cap) document.getElementById('handover-menu').classList.add('hidden')
+  renderFileTree()
+}
+
+// 刷新比赛信息：队长变化时立即切换权限
+async function refreshContest() {
+  const prevCaptain = contest.creator_id
+  contest = await API.getContest(slug)
+  renderMembers()
+  if (contest.creator_id !== prevCaptain) applyPermission()
+}
+
+// 定时刷新成员列表：有人中途加入/队长交接时其他成员能看到（成员信息只在 REST 中，Yjs 不承载）
 function startMembersPoll() {
   setInterval(async () => {
     try {
-      contest = await API.getContest(slug)
-      renderMembers()
+      await refreshContest()
     } catch (e) { /* 网络抖动，下次再试 */ }
-  }, 5000)
+  }, 3000)
+}
+
+// 交接队长：按钮弹出成员菜单（不含自己），确认后调用接口
+function initHandover() {
+  const btn = document.getElementById('btn-handover')
+  const menu = document.getElementById('handover-menu')
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (!menu.classList.contains('hidden')) {
+      menu.classList.add('hidden')
+      return
+    }
+    const online = onlineUserIds()
+    const others = (contest.members || []).filter((m) => m.user_id !== me.id)
+    menu.innerHTML = '<div class="menu-title">选择新的队长</div>' + (others.length
+      ? others.map((m) => `<div class="menu-item" data-uid="${m.user_id}"><span class="dot" style="background:${m.color || '#888'}"></span><span>${esc(memberName(m))}</span>${online.has(m.user_id) ? '' : '<span class="readonly-hint">离线</span>'}</div>`).join('')
+      : '<div class="menu-empty">比赛里还没有其他成员</div>')
+    menu.classList.remove('hidden')
+  })
+  menu.addEventListener('click', async (e) => {
+    const item = e.target.closest('.menu-item')
+    if (!item) return
+    e.stopPropagation()
+    const uid = Number(item.dataset.uid)
+    const target = (contest.members || []).find((m) => m.user_id === uid)
+    menu.classList.add('hidden')
+    if (!target || !window.confirm(`把队长交接给 ${memberName(target)}？交接后你将只能查看代码。`)) return
+    try {
+      contest = await API.transferCaptain(slug, uid)
+      renderMembers()
+      applyPermission()
+    } catch (err) {
+      alert(err.message || '交接失败')
+    }
+  })
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target)) menu.classList.add('hidden')
+  })
 }
 
 function startTimer() {
@@ -274,7 +366,9 @@ function renderFileTree() {
   fileListEl.innerHTML = ''
   const paths = Array.from(y.filesMap.keys()).sort()
   if (paths.length === 0) {
-    fileListEl.innerHTML = '<div class="empty">（空目录，右侧新建一个文件）</div>'
+    fileListEl.innerHTML = isCaptain()
+      ? '<div class="empty">（空目录，下方新建一个文件）</div>'
+      : '<div class="empty">（空目录，等待队长新建文件）</div>'
     return
   }
   paths.forEach((path) => {
@@ -293,7 +387,7 @@ function renderFileTree() {
       }
     })
     item.appendChild(nameSpan)
-    item.appendChild(del)
+    if (isCaptain()) item.appendChild(del) // 只有队长能删除文件
     item.addEventListener('click', () => openFile(path))
     fileListEl.appendChild(item)
   })

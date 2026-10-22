@@ -73,8 +73,10 @@
   <div class="editor-layout">
     <aside id="sidebar" class="sidebar">
       <div id="members-panel">
-        <div class="panel-title">成员</div>
+        <div class="panel-title">成员<button id="btn-handover" class="handover-btn hidden" title="把队长身份交接给其他成员">交接队长</button></div>
         <div id="member-list"></div>
+        <div id="readonly-hint" class="readonly-hint hidden">只有队长可以编辑代码</div>
+        <div id="handover-menu" class="handover-menu hidden"></div>
       </div>
       <div id="files-panel">
         <div class="panel-title">文件</div>
@@ -216,8 +218,8 @@
   <div id="waiting-overlay" class="overlay hidden">
     <div class="overlay-card">
       <h2>比赛尚未开始</h2>
-      <p>等待创建者在大厅点击「开始比赛」…</p>
-      <button id="btn-start-here" class="btn primary hidden">我是创建者，开始比赛</button>
+      <p>等待队长在大厅点击「开始比赛」…</p>
+      <button id="btn-start-here" class="btn primary hidden">我是队长，开始比赛</button>
       <p id="waiting-error" class="error hidden"></p>
     </div>
   </div>

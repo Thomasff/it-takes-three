@@ -43,7 +43,8 @@
     listEl.innerHTML = contests.map((c) => {
       const members = (c.members || []).map((m) => {
         const color = m.color || '#888'
-        return `<span class="member-chip"><span class="dot" style="background:${color}"></span>${esc(m.display_name || m.username || `#${m.user_id}`)}</span>`
+        const badge = m.user_id === c.creator_id ? '<span class="captain-badge">队长</span>' : ''
+        return `<span class="member-chip"><span class="dot" style="background:${color}"></span>${esc(m.display_name || m.username || `#${m.user_id}`)}${badge}</span>`
       }).join('')
       const statusCls = `status-tag ${c.status === 'started' ? 'started' : ''}`
       let actions = ''

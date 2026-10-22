@@ -11,26 +11,40 @@ import { Awareness } from 'y-protocols/awareness'
  * 建立与后端比赛的实时连接。
  * @param {string} slug 比赛 slug
  * @param {string} token 登录 token（query 携带，后端校验）
- * @param {{display_name:string, username:string, color:string}} user 本地用户信息（含服务端分配的颜色）
+ * @param {{id:number, display_name:string, username:string, color:string}} user 本地用户信息（含服务端分配的颜色）
  * @returns {{doc:Y.Doc, filesMap:Y.Map, awareness:Awareness, provider:WebsocketProvider}}
  */
 export function setupYjs(slug, token, user) {
-  const doc = new Y.Doc()
+  const { doc, awareness, provider } = connectRoom(`contest/${slug}`, token, user)
   const filesMap = doc.getMap('files')
+  return { doc, filesMap, awareness, provider }
+}
+
+/**
+ * 建立草稿纸的独立连接（独立 Y.Doc：代码房间仅队长可写，草稿纸所有成员可写）。
+ * @returns {{doc:Y.Doc, awareness:Awareness, provider:WebsocketProvider}}
+ */
+export function setupScratchYjs(slug, token, user) {
+  return connectRoom(`scratch/${slug}`, token, user)
+}
+
+function connectRoom(roomname, token, user) {
+  const doc = new Y.Doc()
   const awareness = new Awareness(doc)
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const provider = new WebsocketProvider(
     `${protocol}//${location.host}/ws`,
-    `contest/${slug}`,
+    roomname,
     doc,
     { params: { token }, awareness },
   )
-  // 广播本地身份：名字 + 服务端分配的颜色（光标/标签用）
+  // 广播本地身份：名字 + 服务端分配的颜色（光标/标签用）+ user_id（成员在线状态用）
   awareness.setLocalStateField('user', {
+    id: user.id,
     name: user.display_name || user.username || '匿名',
     color: user.color || '#888888',
   })
-  return { doc, filesMap, awareness, provider }
+  return { doc, awareness, provider }
 }
 
 /** 新建文件（已存在返回 false）。 */

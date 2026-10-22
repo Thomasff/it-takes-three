@@ -25,6 +25,9 @@ class ContestRoom:
         self.hub = AwarenessHub()
         # WebSocket 连接注册表（保证线程安全的广播在 ws 路由的 asyncio 环内执行）
         self.connections: set = set()
+        # 当前队长 user_id（仅代码房间使用：只有队长的 update 会被接受）；
+        # 连接建立时从数据库刷新，交接队长接口会同步更新
+        self.captain_id: int | None = None
 
     def get_map(self, key: str) -> Y.YMap:
         """功能：取 doc 下的 YMap（如 "files"）。
@@ -69,23 +72,24 @@ class RoomManager:
     def __init__(self) -> None:
         self.rooms: dict[str, ContestRoom] = {}
 
-    def key_for(self, slug: str) -> str:
+    def key_for(self, slug: str, kind: str = "contest") -> str:
         """功能：房间 key 规约（对齐前端 WebsocketProvider 的 roomname）。
-        API: key_for(str) → str
-        依赖：无。可调参数：无。"""
-        return f"contest/{slug}"
+        kind="contest" 为代码文件房间（仅队长可写），kind="scratch" 为草稿纸房间（成员均可写）。
+        API: key_for(str, kind="contest") → str
+        依赖：无。可调参数：kind。"""
+        return f"{kind}/{slug}"
 
-    def get_or_create(self, slug: str) -> ContestRoom:
+    def get_or_create(self, slug: str, kind: str = "contest") -> ContestRoom:
         """功能：按 slug 获取房间，不存在则创建（并发安全由 GIL + 单事件循环保证）。
-        API: get_or_create(str) → ContestRoom
-        依赖：ContestRoom。可调参数：无。"""
-        key = self.key_for(slug)
+        API: get_or_create(str, kind="contest") → ContestRoom
+        依赖：ContestRoom。可调参数：kind。"""
+        key = self.key_for(slug, kind)
         if key not in self.rooms:
             self.rooms[key] = ContestRoom(slug)
         return self.rooms[key]
 
-    def get(self, slug: str) -> ContestRoom | None:
+    def get(self, slug: str, kind: str = "contest") -> ContestRoom | None:
         """功能：按 slug 获取房间，不存在返回 None。
-        API: get(str) → ContestRoom|None
-        依赖：无。可调参数：无。"""
-        return self.rooms.get(self.key_for(slug))
+        API: get(str, kind="contest") → ContestRoom|None
+        依赖：无。可调参数：kind。"""
+        return self.rooms.get(self.key_for(slug, kind))
