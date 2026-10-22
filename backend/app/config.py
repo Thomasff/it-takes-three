@@ -11,6 +11,7 @@
 #   RUN_TIME_LIMIT_SECONDS  程序运行时限秒数（默认 10，超时 kill 并标记 TLE）
 #   RUN_DIR                 运行/调试工作目录（默认 data/run，按 slug/session 隔离）
 #   GDB_BIN                 gdb 可执行路径（默认 gdb）
+#   DOC_SAVE_INTERVAL_SECONDS 协作文档（代码/草稿纸）落盘间隔秒数（默认 2）
 #   VENDOR_DIR / FRONTEND_DIR 静态资源目录（默认 vendor/、frontend/，相对项目根目录）
 import os
 from dataclasses import dataclass, field
@@ -36,6 +37,7 @@ class Settings:
     RUN_TIME_LIMIT_SECONDS: int = field(default_factory=lambda: int(_env("RUN_TIME_LIMIT_SECONDS", "10")))
     RUN_DIR: str = field(default_factory=lambda: _env("RUN_DIR", os.path.join(PROJECT_ROOT, "data", "run")))
     GDB_BIN: str = field(default_factory=lambda: _env("GDB_BIN", "gdb"))
+    DOC_SAVE_INTERVAL_SECONDS: float = field(default_factory=lambda: float(_env("DOC_SAVE_INTERVAL_SECONDS", "2")))
     VENDOR_DIR: str = field(default_factory=lambda: _env("VENDOR_DIR", os.path.join(PROJECT_ROOT, "vendor")))
     FRONTEND_DIR: str = field(default_factory=lambda: _env("FRONTEND_DIR", os.path.join(PROJECT_ROOT, "frontend")))
 
