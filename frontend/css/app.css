@@ -291,8 +291,40 @@ html, body {
   font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   font-size: 13px;
 }
+.file-item > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-item:hover { background: #32324a; }
 .file-item.active { background: var(--accent); color: #fff; }
+/* 右键菜单（context-menu.js） */
+.ctx-menu {
+  position: fixed;
+  z-index: 100;
+  min-width: 120px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  padding: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.ctx-item { padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+.ctx-item:hover { background: #32324a; }
+.ctx-item.danger { color: var(--danger); }
+.inline-rename {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1b1b2a;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 1px 4px;
+  font: inherit;
+  outline: none;
+}
+
+/* 队员：文件跟随队长，不可点击切换 */
+.file-list.follow .file-item { cursor: default; }
+.file-list.follow .file-item:not(.active):hover { background: transparent; }
 .file-del { color: var(--muted); padding: 0 4px; border-radius: 4px; }
 .file-del:hover { color: #fff; background: var(--danger); }
 .file-list .empty { color: var(--muted); font-size: 12px; padding: 8px 10px; }

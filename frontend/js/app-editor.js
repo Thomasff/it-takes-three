@@ -5,7 +5,8 @@
 // 依赖：auth.js、api.js（全局）、editor-setup.js、yjs-setup.js、cursors.js、y-monaco。
 // 可调参数：无。
 import { createEditor } from './editor-setup.js'
-import { setupYjs, setupScratchYjs, createFile, deleteFile } from './yjs-setup.js'
+import { setupYjs, setupScratchYjs, createFile, deleteFile, renameFile } from './yjs-setup.js'
+import { showContextMenu, inlineRename } from './context-menu.js'
 import { setupRemoteCursors } from './cursors.js'
 import { RunSession } from './runner.js'
 import { DebugSession, BreakpointManager } from './debugger.js'
@@ -146,6 +147,7 @@ async function initEditor() {
   // ---- 草稿纸（编辑器/草稿纸 视图切换）----
   // 草稿纸使用独立 Y.Doc（/ws/scratch/{slug}）：代码房间只有队长可写，草稿纸所有成员都可写。
   scratchY = setupScratchYjs(slug, myToken, localUser)
+  window.__scratch = scratchY // 调试
   const scratchpadMod = await import('./scratchpad.js')
   scratchpad = scratchpadMod.initScratchpad({
     doc: scratchY.doc,
@@ -198,8 +200,12 @@ async function initEditor() {
   renderMembers()
   applyPermission()
   initHandover()
-  // 在线状态来自代码房间 awareness（user.id），成员上下线时刷新成员面板
-  y.awareness.on('change', () => renderMembers())
+  // 在线状态来自代码房间 awareness（user.id），成员上下线时刷新成员面板；
+  // 队长切换文件（awareness.file）时队员跟随
+  y.awareness.on('change', () => {
+    renderMembers()
+    followCaptain()
+  })
   startMembersPoll()
   startTimer()
   renderFileTree()
@@ -207,6 +213,7 @@ async function initEditor() {
 
   y.filesMap.observe(() => {
     renderFileTree()
+    followCaptain() // 队长新建并打开的文件可能刚同步到
     maybeOpenFirst()
     // 当前文件被远端删除时关闭
     if (current && !y.filesMap.has(current)) closeFile()
@@ -215,6 +222,11 @@ async function initEditor() {
   document.getElementById('btn-add-file').addEventListener('click', () => {
     if (!isCaptain()) return
     const name = newFileInput.value.trim() || 'main.cpp'
+    const err = checkFileName(name)
+    if (err) {
+      alert(err)
+      return
+    }
     if (createFile(y.filesMap, name)) {
       newFileInput.value = ''
       openFile(name)
@@ -282,8 +294,29 @@ function applyPermission() {
   document.querySelector('.file-actions').classList.toggle('hidden', !cap)
   document.getElementById('readonly-hint').classList.toggle('hidden', cap)
   document.getElementById('btn-handover').classList.toggle('hidden', !cap)
+  fileListEl.classList.toggle('follow', !cap)
   if (!cap) document.getElementById('handover-menu').classList.add('hidden')
+  // 队长广播自己正在看的文件；队员改为跟随队长
+  if (y) y.awareness.setLocalStateField('file', cap ? current : null)
   renderFileTree()
+  followCaptain()
+}
+
+// 队长当前打开的文件（来自队长 awareness 的 file 字段；队长离线/未打开文件时为 null）
+function captainFile() {
+  if (!y || !contest) return null
+  let file = null
+  y.awareness.getStates().forEach((state) => {
+    if (!file && state.user && state.user.id === contest.creator_id && state.file) file = state.file
+  })
+  return file
+}
+
+// 打开的代码文件统一：队员只能看到队长正在看的文件
+function followCaptain() {
+  if (isCaptain()) return
+  const file = captainFile()
+  if (file && file !== current && y.filesMap.has(file)) openFile(file)
 }
 
 // 刷新比赛信息：队长变化时立即切换权限
@@ -388,13 +421,43 @@ function renderFileTree() {
     })
     item.appendChild(nameSpan)
     if (isCaptain()) item.appendChild(del) // 只有队长能删除文件
-    item.addEventListener('click', () => openFile(path))
+    // 队员的文件跟随队长切换，不能自行打开其他文件
+    item.addEventListener('click', () => { if (isCaptain()) openFile(path) })
+    // 右键菜单：重命名 / 删除（仅队长）
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      if (!isCaptain()) return
+      showContextMenu(e.clientX, e.clientY, [
+        { label: '重命名', onClick: () => inlineRename(nameSpan, path, (to) => doRenameFile(path, to)) },
+        { label: '删除', danger: true, onClick: () => { if (window.confirm(`删除 ${path}？`)) deleteFile(y.filesMap, path) } },
+      ])
+    })
     fileListEl.appendChild(item)
   })
 }
 
+// 文件名校验（与后端 exec.sanitize_path 规则一致：字母数字下划线点横线，可含子目录，禁止 ..）
+const FILE_NAME_RE = /^[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)*$/u
+function checkFileName(name) {
+  if (!FILE_NAME_RE.test(name) || name.split('/').includes('..')) {
+    return '文件名只能包含字母、数字、下划线、点和横线（可用 / 表示子目录）'
+  }
+  return null
+}
+
+// 重命名文件；返回字符串表示失败原因（inlineRename 会提示并保持编辑）
+function doRenameFile(from, to) {
+  const err = checkFileName(to)
+  if (err) return err
+  if (y.filesMap.has(to)) return `文件 ${to} 已存在`
+  const wasCurrent = current === from
+  if (!renameFile(y.filesMap, from, to)) return '重命名失败'
+  if (wasCurrent) openFile(to) // 队员通过 awareness.file 跟随到新文件名
+}
+
 function maybeOpenFirst() {
   if (current || !y || y.filesMap.size === 0) return
+  if (!isCaptain() && captainFile()) return // 队员优先跟随队长（followCaptain 负责打开）
   const paths = Array.from(y.filesMap.keys()).sort()
   // 优先打开 main.*（避免默认打开字母序第一个文件如 bad.cpp，点运行直接编译失败）
   const first = paths.find((p) => /(^|\/)(main|a)\.(cpp|c|cc|cxx)$/i.test(p)) || paths[0]
@@ -415,6 +478,7 @@ function openFile(path) {
   cursors.setShowNames(namesVisible)
   bindings.set(path, { model, binding, cursors })
   current = path
+  if (isCaptain()) y.awareness.setLocalStateField('file', path) // 队员据此跟随
   renderFileTree()
   updateRunButtons()
 }
@@ -430,6 +494,7 @@ function closeFile() {
     try { entry.model.dispose() } catch (e) { /* 忽略 */ }
   }
   current = null
+  if (isCaptain() && y) y.awareness.setLocalStateField('file', null)
   // 关闭文件：停止正在进行的运行/调试，清空断点与当前行高亮
   if (breakpointMgr) {
     breakpointMgr.clear()

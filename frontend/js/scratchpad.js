@@ -9,9 +9,13 @@
 // 可调参数：initScratchpad({doc, awareness, getShowNames}) → {setShowNames(v), destroy()}。
 
 import * as Y from 'yjs'
+import { showContextMenu, inlineRename } from './context-menu.js'
 
-const W = 1200 // 虚拟坐标系：固定 1200×800，画布按实际尺寸缩放，坐标始终在虚拟系运算
-const H = 800
+const W = 2400 // 虚拟坐标系：固定 2400×1600，画布按实际尺寸缩放，坐标始终在虚拟系运算
+const H = 1600
+// 画布显示尺寸 = 适配窗口的尺寸 × CANVAS_ZOOM（与虚拟坐标同步翻倍：原 1200×800 内容的
+// 显示比例不变，只是多出右侧/下方空间），超出画布区的部分滚动查看
+const CANVAS_ZOOM = 2
 const ERASE_THRESHOLD = 12 // 擦除命中阈值（虚拟 px）：点到折线最小距离
 const PREVIEW_ALPHA = 0.45 // 远端绘制中预览透明度
 const TEXT_DEFAULT_W = 140 // 新建文本框默认宽（虚拟 px）
@@ -30,6 +34,7 @@ const ERASER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(ERASER_SVG)}
 export function initScratchpad({ doc, awareness, getShowNames }) {
   const annotations = doc.getMap('annotations') // 旧数据（迁移到多页结构后不再使用）
   const scratchpages = doc.getMap('scratchpages') // pageId -> Y.Map（页内对象）
+  const pagemeta = doc.getMap('pagemeta') // pageId -> Y.Map（页属性：name 自定义页名）
   const container = document.getElementById('scratchpad-container')
   const canvas = document.getElementById('scratch-canvas')
   const ctx = canvas.getContext('2d')
@@ -80,13 +85,13 @@ export function initScratchpad({ doc, awareness, getShowNames }) {
     paintFull()
   }
 
-  // 画布区可用空间驱动缩放：等比（1200:800）取能同时塞下宽高的最大尺寸，防止超高/超宽
+  // 画布区可用空间驱动缩放：等比（3:2）取能同时塞下宽高的最大尺寸，再放大 CANVAS_ZOOM 倍
   function fitWrap() {
     const z = zone.getBoundingClientRect()
     const availW = Math.max(0, z.width - 32)
     const availH = Math.max(0, z.height - 32)
-    let w = Math.min(availW, availH * (W / H))
-    wrap.style.width = Math.max(200, w) + 'px'
+    const w = Math.min(availW, availH * (W / H)) * CANVAS_ZOOM
+    wrap.style.width = Math.max(400, w) + 'px'
     wrap.style.height = (wrap.clientWidth * H / W) + 'px'
   }
 
@@ -542,7 +547,29 @@ export function initScratchpad({ doc, awareness, getShowNames }) {
 
   function deletePage(id) {
     if (scratchpages.size <= 1) return // 至少保留一页
-    scratchpages.delete(id) // 触发 onPagesChange：刷新列表 + 若删除的是当前页则回退第一页
+    doc.transact(() => {
+      scratchpages.delete(id) // 触发 onPagesChange：刷新列表 + 若删除的是当前页则回退第一页
+      pagemeta.delete(id)
+    })
+  }
+
+  // 页名：自定义名（pagemeta.name）优先，否则按序号显示“页 N”
+  function pageName(id, idx) {
+    const meta = pagemeta.get(id)
+    const name = meta && meta.get('name')
+    return name || `页 ${idx + 1}`
+  }
+
+  function renamePage(id, name) {
+    if (name.length > 30) return '页名最多 30 个字'
+    doc.transact(() => {
+      let meta = pagemeta.get(id)
+      if (!meta) {
+        meta = new Y.Map()
+        pagemeta.set(id, meta)
+      }
+      meta.set('name', name)
+    })
   }
 
   function switchPage(id) {
@@ -565,19 +592,29 @@ export function initScratchpad({ doc, awareness, getShowNames }) {
       const row = document.createElement('div')
       row.className = 'scratchpad-page' + (id === currentPage ? ' active' : '')
       row.dataset.page = id
+      const label = pageName(id, idx)
       const name = document.createElement('span')
-      name.textContent = `页 ${idx + 1}`
+      name.textContent = label
       const del = document.createElement('button')
       del.className = 'del'
       del.textContent = '✕'
       del.title = '删除此页'
       del.addEventListener('click', (e) => {
         e.stopPropagation()
-        if (window.confirm(`删除 页 ${idx + 1}？`)) deletePage(id)
+        if (window.confirm(`删除 ${label}？`)) deletePage(id)
       })
       row.appendChild(name)
       row.appendChild(del)
       row.addEventListener('click', () => switchPage(id))
+      // 右键菜单：重命名 / 删除
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault()
+        const items = [{ label: '重命名', onClick: () => inlineRename(name, label, (v) => renamePage(id, v)) }]
+        if (scratchpages.size > 1) {
+          items.push({ label: '删除', danger: true, onClick: () => { if (window.confirm(`删除 ${label}？`)) deletePage(id) } })
+        }
+        showContextMenu(e.clientX, e.clientY, items)
+      })
       pageListEl.appendChild(row)
     })
   }
@@ -620,6 +657,8 @@ export function initScratchpad({ doc, awareness, getShowNames }) {
   }
 
   scratchpages.observe(onPagesChange)
+  const onMetaChange = () => renderPages() // 页名变化（含远端重命名）
+  pagemeta.observeDeep(onMetaChange)
   awareness.on('change', onAwarenessChange)
 
   canvas.addEventListener('pointerdown', onPointerDown)
@@ -692,6 +731,7 @@ export function initScratchpad({ doc, awareness, getShowNames }) {
     destroy() {
       if (active) awareness.setLocalStateField('scratch', null)
       scratchpages.unobserve(onPagesChange)
+      pagemeta.unobserveDeep(onMetaChange)
       awareness.off('change', onAwarenessChange)
       scratchpages.forEach((page, id) => {
         const l = pageObs.get(id)

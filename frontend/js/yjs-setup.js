@@ -54,6 +54,20 @@ export function createFile(filesMap, path, content = '') {
   return true
 }
 
+/**
+ * 重命名文件（源不存在或目标已存在返回 false）。
+ * Y.Map 的键不能直接改名：同一事务内以原内容新建 Y.Text 并删除旧键，远端一次性看到结果。
+ */
+export function renameFile(filesMap, from, to) {
+  if (!filesMap.has(from) || filesMap.has(to)) return false
+  filesMap.doc.transact(() => {
+    const content = filesMap.get(from).toString()
+    filesMap.delete(from)
+    filesMap.set(to, new Y.Text(content))
+  })
+  return true
+}
+
 /** 删除文件（不存在返回 false）。 */
 export function deleteFile(filesMap, path) {
   if (!filesMap.has(path)) return false
